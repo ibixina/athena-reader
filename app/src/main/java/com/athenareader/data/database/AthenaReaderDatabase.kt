@@ -21,7 +21,7 @@ import com.athenareader.data.entity.ReadingProgressEntity
     version = 2,
     exportSchema = false
 )
-abstract class InkReaderDatabase : RoomDatabase() {
+abstract class AthenaReaderDatabase : RoomDatabase() {
     abstract fun documentDao(): DocumentDao
     abstract fun readingProgressDao(): ReadingProgressDao
     abstract fun annotationDao(): AnnotationDao

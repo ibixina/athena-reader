@@ -5,7 +5,7 @@ import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import dagger.hilt.android.HiltAndroidApp
 
 @HiltAndroidApp
-class InkReaderApp : Application() {
+class AthenaReaderApp : Application() {
     override fun onCreate() {
         super.onCreate()
         PDFBoxResourceLoader.init(applicationContext)

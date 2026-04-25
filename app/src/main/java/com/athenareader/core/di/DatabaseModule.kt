@@ -2,7 +2,7 @@ package com.athenareader.core.di
 
 import android.content.Context
 import androidx.room.Room
-import com.athenareader.data.database.InkReaderDatabase
+import com.athenareader.data.database.AthenaReaderDatabase
 import com.athenareader.data.dao.AnnotationDao
 import com.athenareader.data.dao.DocumentDao
 import com.athenareader.data.dao.HighlightDao
@@ -20,28 +20,28 @@ object DatabaseModule {
 
     @Provides
     @Singleton
-    fun provideDatabase(@ApplicationContext context: Context): InkReaderDatabase {
+    fun provideDatabase(@ApplicationContext context: Context): AthenaReaderDatabase {
         return Room.databaseBuilder(
             context,
-            InkReaderDatabase::class.java,
-            "ink_reader_db"
+            AthenaReaderDatabase::class.java,
+            "athena_reader_db"
         ).fallbackToDestructiveMigration().build()
     }
 
     @Provides
-    fun provideDocumentDao(database: InkReaderDatabase): DocumentDao =
+    fun provideDocumentDao(database: AthenaReaderDatabase): DocumentDao =
         database.documentDao()
 
     @Provides
-    fun provideReadingProgressDao(database: InkReaderDatabase): ReadingProgressDao =
+    fun provideReadingProgressDao(database: AthenaReaderDatabase): ReadingProgressDao =
         database.readingProgressDao()
 
     @Provides
-    fun provideAnnotationDao(database: InkReaderDatabase): AnnotationDao =
+    fun provideAnnotationDao(database: AthenaReaderDatabase): AnnotationDao =
         database.annotationDao()
 
     @Provides
-    fun provideHighlightDao(database: InkReaderDatabase): HighlightDao =
+    fun provideHighlightDao(database: AthenaReaderDatabase): HighlightDao =
         database.highlightDao()
 }
 

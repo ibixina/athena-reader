@@ -1,9 +1,7 @@
 package com.athenareader.ui.annotation
 
 import android.graphics.Color as AndroidColor
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -31,88 +29,144 @@ private val PRESET_COLORS = listOf(
 
 @Composable
 fun AnnotationToolbar(
-    visible: Boolean,
     activeTool: PenTool?,
-    activeColor: Int,
-    strokeWidth: Float,
+    penSettings: ToolSettings,
+    highlighterSettings: ToolSettings,
     onToolSelected: (PenTool) -> Unit,
-    onColorSelected: (Int) -> Unit,
-    onWidthChanged: (Float) -> Unit
+    onColorSelected: (PenTool, Int) -> Unit,
+    onWidthChanged: (PenTool, Float) -> Unit,
+    modifier: Modifier = Modifier
 ) {
-    AnimatedVisibility(
-        visible = visible,
-        enter = slideInVertically { it },
-        exit = slideOutVertically { it }
-    ) {
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            tonalElevation = 8.dp,
-            shadowElevation = 4.dp,
-            shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)
+    var showSettings by remember { mutableStateOf(false) }
+
+    LaunchedEffect(activeTool) {
+        if (activeTool == null) showSettings = false
+    }
+
+    Box(modifier = modifier) {
+        Row(
+            verticalAlignment = Alignment.Top,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Column(
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+            // Settings popover (left of buttons)
+            AnimatedVisibility(
+                visible = showSettings && activeTool != null && activeTool != PenTool.ERASER,
+                enter = fadeIn() + scaleIn(initialScale = 0.8f),
+                exit = fadeOut() + scaleOut(targetScale = 0.8f)
             ) {
-                // Tool row
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    ToolButton("✒️", "Pen", activeTool == PenTool.FINE_PEN) { onToolSelected(PenTool.FINE_PEN) }
-                    ToolButton("🖍️", "Highlight", activeTool == PenTool.HIGHLIGHTER) { onToolSelected(PenTool.HIGHLIGHTER) }
-                    ToolButton("⌫", "Eraser", activeTool == PenTool.ERASER) { onToolSelected(PenTool.ERASER) }
+                val currentColor = when (activeTool) {
+                    PenTool.FINE_PEN -> penSettings.color
+                    PenTool.HIGHLIGHTER -> highlighterSettings.color
+                    else -> 0
+                }
+                val currentWidth = when (activeTool) {
+                    PenTool.FINE_PEN -> penSettings.strokeWidth
+                    PenTool.HIGHLIGHTER -> highlighterSettings.strokeWidth
+                    else -> 4f
+                }
+                ToolSettingsPopover(
+                    activeTool = activeTool,
+                    activeColor = currentColor,
+                    strokeWidth = currentWidth,
+                    onColorSelected = { color -> activeTool?.let { onColorSelected(it, color) } },
+                    onWidthChanged = { width -> activeTool?.let { onWidthChanged(it, width) } }
+                )
+            }
 
-                    Spacer(Modifier.width(16.dp))
-
-                    // Color dots
-                    PRESET_COLORS.forEach { color ->
-                        Box(
-                            modifier = Modifier
-                                .size(28.dp)
-                                .clip(CircleShape)
-                                .background(Color(color))
-                                .border(
-                                    width = if (color == activeColor) 2.dp else 0.dp,
-                                    color = MaterialTheme.colorScheme.primary,
-                                    shape = CircleShape
-                                )
-                                .clickable { onColorSelected(color) }
-                        )
+            // Tool buttons column — pen and highlight only (eraser is pen button)
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                MiniToolFab(
+                    emoji = "✒️",
+                    selected = activeTool == PenTool.FINE_PEN,
+                    onClick = {
+                        if (activeTool == PenTool.FINE_PEN) showSettings = !showSettings
+                        else { showSettings = false; onToolSelected(PenTool.FINE_PEN) }
                     }
-                }
-
-                // Width slider
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Width", fontSize = 12.sp)
-                    Slider(
-                        value = strokeWidth,
-                        onValueChange = onWidthChanged,
-                        valueRange = 1f..20f,
-                        modifier = Modifier
-                            .weight(1f)
-                            .padding(horizontal = 8.dp)
-                    )
-                }
+                )
+                MiniToolFab(
+                    emoji = "🖍️",
+                    selected = activeTool == PenTool.HIGHLIGHTER,
+                    onClick = {
+                        if (activeTool == PenTool.HIGHLIGHTER) showSettings = !showSettings
+                        else { showSettings = false; onToolSelected(PenTool.HIGHLIGHTER) }
+                    }
+                )
             }
         }
     }
 }
 
 @Composable
-private fun ToolButton(emoji: String, label: String, selected: Boolean, onClick: () -> Unit) {
+private fun MiniToolFab(emoji: String, selected: Boolean, onClick: () -> Unit) {
     Surface(
-        modifier = Modifier.clickable(onClick = onClick),
-        shape = RoundedCornerShape(8.dp),
-        tonalElevation = if (selected) 12.dp else 0.dp,
-        color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
+        modifier = Modifier
+            .size(42.dp)
+            .then(
+                if (selected) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, CircleShape)
+                else Modifier
+            )
+            .clickable(onClick = onClick),
+        shape = CircleShape,
+        tonalElevation = if (selected) 12.dp else 4.dp,
+        shadowElevation = if (selected) 6.dp else 2.dp,
+        color = if (selected) {
+            MaterialTheme.colorScheme.primaryContainer
+        } else {
+            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.85f)
+        }
     ) {
-        Column(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text(emoji, fontSize = 20.sp)
-            Text(label, fontSize = 10.sp)
+        Box(contentAlignment = Alignment.Center) {
+            Text(emoji, fontSize = 18.sp)
+        }
+    }
+}
+
+@Composable
+private fun ToolSettingsPopover(
+    activeTool: PenTool?,
+    activeColor: Int,
+    strokeWidth: Float,
+    onColorSelected: (Int) -> Unit,
+    onWidthChanged: (Float) -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        tonalElevation = 8.dp,
+        shadowElevation = 4.dp,
+        modifier = Modifier.widthIn(max = 240.dp)
+    ) {
+        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            // Color row
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                PRESET_COLORS.forEach { color ->
+                    Box(
+                        modifier = Modifier
+                            .size(26.dp)
+                            .clip(CircleShape)
+                            .background(Color(color))
+                            .border(
+                                width = if (color == activeColor) 2.dp else 0.dp,
+                                color = MaterialTheme.colorScheme.primary,
+                                shape = CircleShape
+                            )
+                            .clickable { onColorSelected(color) }
+                    )
+                }
+            }
+
+            // Width slider
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("W", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Slider(
+                    value = strokeWidth,
+                    onValueChange = onWidthChanged,
+                    valueRange = if (activeTool == PenTool.FINE_PEN) 1f..8f else 4f..30f,
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = 4.dp)
+                )
+                Text("${strokeWidth.toInt()}", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
     }
 }

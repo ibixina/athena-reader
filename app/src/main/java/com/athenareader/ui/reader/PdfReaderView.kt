@@ -1,42 +1,45 @@
 package com.athenareader.ui.reader
 
 import android.graphics.Bitmap
+import android.view.MotionEvent
 import android.widget.OverScroller
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.calculateCentroid
-import androidx.compose.foundation.gestures.calculatePan
-import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.*
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.pointer.positionChanged
-import androidx.compose.ui.input.pointer.util.VelocityTracker
+import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import com.athenareader.core.cache.TileCache
 import com.athenareader.domain.model.Document
+import com.athenareader.domain.model.PenTool
 import com.athenareader.domain.model.ReadingProgress
+import com.athenareader.domain.model.Stroke
+import com.athenareader.domain.model.StrokePoint
+import com.athenareader.ui.annotation.StrokeRenderer.drawLiveStroke
+import com.athenareader.ui.annotation.StrokeRenderer.drawStroke
 import com.athenareader.ui.renderer.ViewportManager
 import com.athenareader.ui.renderer.pdf.TileRendererPool
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.StateFlow
 
 private const val MIN_SCALE = 0.5f
 private const val MAX_SCALE = 5.0f
 private const val PAGE_GAP = 4
 private const val DOUBLE_TAP_TIMEOUT_MS = 300L
 private const val TAP_SLOP = 20f
+private const val LONG_PRESS_MS = 400L
 private const val PREFETCH_OVERSCAN_TILES = 1
 private const val PREFETCH_PRIORITY_OFFSET = 100_000
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun PdfReaderView(
     document: Document,
@@ -46,8 +49,14 @@ fun PdfReaderView(
     tilePool: TileRendererPool,
     viewportManager: ViewportManager,
     initialProgress: ReadingProgress?,
-    requestedPageIndex: Int?,
-    onTransformChanged: (scale: Float, offsetX: Float, offsetY: Float) -> Unit,
+    requestedPageJump: Pair<Int, Int>?,  // (pageIndex, counter) to allow repeated jumps
+    activeToolFlow: StateFlow<PenTool?>,
+    strokesFlow: StateFlow<List<Stroke>>,
+    livePointsFlow: StateFlow<List<StrokePoint>>,
+    activeColorFlow: StateFlow<Int>,
+    strokeWidthFlow: StateFlow<Float>,
+    onPointAdded: (StrokePoint) -> Unit,
+    onStrokeCommitted: (pageIndex: Int, isStylusButtonErasing: Boolean, isTouchHighlight: Boolean) -> Unit,
     onViewportChanged: (pageIndex: Int, scrollX: Int, scrollY: Int, zoom: Float) -> Unit,
     onSingleTap: () -> Unit = {}
 ) {
@@ -55,6 +64,13 @@ fun PdfReaderView(
     val loadedTiles = remember(document.id) { mutableStateMapOf<String, Bitmap>() }
     val context = LocalContext.current
     val scroller = remember { OverScroller(context) }
+
+    // Collect flows as State — read only inside Canvas to avoid recomposition
+    val strokes by strokesFlow.collectAsState()
+    val livePoints by livePointsFlow.collectAsState()
+    val activeColor by activeColorFlow.collectAsState()
+    val strokeWidth by strokeWidthFlow.collectAsState()
+    val activeTool by activeToolFlow.collectAsState()
 
     LaunchedEffect(document.id) {
         loadedTiles.clear()
@@ -93,124 +109,270 @@ fun PdfReaderView(
             }
         }
 
-        LaunchedEffect(requestedPageIndex) {
-            val targetPage = requestedPageIndex ?: return@LaunchedEffect
+        LaunchedEffect(requestedPageJump) {
+            val (targetPage, _) = requestedPageJump ?: return@LaunchedEffect
             val targetTop = targetPage * (pageHeight + PAGE_GAP)
             offsetY = (-1f * targetTop * scale).coerceIn(boundsY(scale))
         }
 
+        var isStylusDrawing by remember { mutableStateOf(false) }
+        var stylusButtonHeld by remember { mutableStateOf(false) }
+        var flingJob by remember { mutableStateOf<Job?>(null) }
+        var lastTapTime by remember { mutableLongStateOf(0L) }
+        var fingerDownX by remember { mutableFloatStateOf(0f) }
+        var fingerDownY by remember { mutableFloatStateOf(0f) }
+        var lastFingerX by remember { mutableFloatStateOf(0f) }
+        var lastFingerY by remember { mutableFloatStateOf(0f) }
+        var fingerDragged by remember { mutableStateOf(false) }
+        var fingerDown by remember { mutableStateOf(false) }
+        var secondPointerDown by remember { mutableStateOf(false) }
+        var lastPointer0X by remember { mutableFloatStateOf(0f) }
+        var lastPointer0Y by remember { mutableFloatStateOf(0f) }
+        var lastPointer1X by remember { mutableFloatStateOf(0f) }
+        var lastPointer1Y by remember { mutableFloatStateOf(0f) }
+        var lastPinchDist by remember { mutableFloatStateOf(0f) }
+        val velocitySamples = remember { mutableListOf<Triple<Long, Float, Float>>() }
+
+        // Long-press touch highlight
+        var isTouchHighlighting by remember { mutableStateOf(false) }
+        var fingerDownTime by remember { mutableLongStateOf(0L) }
+        var longPressJob by remember { mutableStateOf<Job?>(null) }
+
+        // Palm rejection: timestamp of last stylus event (hover or touch)
+        var lastStylusEventMs by remember { mutableLongStateOf(0L) }
+        val palmCooldownMs = 300L
+
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .pointerInput(pageCount, pageWidth, pageHeight) {
-                    var flingJob: Job? = null
-                    var lastTapTime = 0L
+                .pointerInteropFilter { event ->
+                    val isStylus = event.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS
 
-                    awaitEachGesture {
-                        awaitFirstDown(requireUnconsumed = false)
-                        flingJob?.cancel()
-                        flingJob = null
-                        scroller.forceFinished(true)
+                    // Track stylus proximity (hover events)
+                    if (isStylus) {
+                        lastStylusEventMs = System.currentTimeMillis()
+                    }
 
-                        val velocityTracker = VelocityTracker()
-                        val downPosition = currentEvent.changes.first().position
-                        var dragged = false
+                    // Reject finger events when stylus is near or was recently used
+                    val stylusNear = isStylusDrawing ||
+                        (System.currentTimeMillis() - lastStylusEventMs < palmCooldownMs)
+                    val isFinger = !isStylus
+                    if (isFinger && stylusNear && activeTool != null) {
+                        return@pointerInteropFilter true // consume and ignore
+                    }
 
-                        do {
-                            val event = awaitPointerEvent()
-                            val activePointers = event.changes.filter { it.pressed }
+                    val shouldDraw = isStylus && (activeTool != null || hasStylusButton(event))
 
-                            if (activePointers.size >= 2) {
-                                dragged = true
-                                val zoom = event.calculateZoom()
-                                val pan = event.calculatePan()
-                                val centroid = event.calculateCentroid()
-
-                                val newScale = (scale * zoom).coerceIn(MIN_SCALE, MAX_SCALE)
-                                val ratio = newScale / scale
-                                val focusX = (centroid.x - offsetX) * (1 - ratio)
-                                val focusY = (centroid.y - offsetY) * (1 - ratio)
-
-                                scale = newScale
-                                offsetX = (offsetX + focusX + pan.x).coerceIn(boundsX(newScale))
-                                offsetY = (offsetY + focusY + pan.y).coerceIn(boundsY(newScale))
-                                event.changes.forEach { if (it.positionChanged()) it.consume() }
-                            } else if (activePointers.size == 1) {
-                                val change = activePointers.first()
-                                val pan = event.calculatePan()
-                                velocityTracker.addPosition(change.uptimeMillis, change.position)
-
-                                val dx = change.position.x - downPosition.x
-                                val dy = change.position.y - downPosition.y
-                                if (dx * dx + dy * dy > TAP_SLOP * TAP_SLOP) dragged = true
-
-                                offsetX = (offsetX + pan.x).coerceIn(boundsX(scale))
-                                offsetY = (offsetY + pan.y).coerceIn(boundsY(scale))
-                                event.changes.forEach { if (it.positionChanged()) it.consume() }
-                            }
-                        } while (activePointers.isNotEmpty())
-
-                        if (!dragged) {
-                            val now = System.currentTimeMillis()
-                            if (now - lastTapTime < DOUBLE_TAP_TIMEOUT_MS) {
-                                lastTapTime = 0L
-                                scale = fitScale
-                                offsetX = 0f
-                                offsetY = offsetY.coerceIn(boundsY(fitScale))
+                    when (event.actionMasked) {
+                        MotionEvent.ACTION_DOWN -> {
+                            if (shouldDraw) {
+                                isStylusDrawing = true
+                                stylusButtonHeld = hasStylusButton(event)
+                                onPointAdded(StrokePoint(
+                                    x = (event.x - offsetX) / scale,
+                                    y = (event.y - offsetY) / scale,
+                                    pressure = event.pressure,
+                                    timestamp = event.eventTime
+                                ))
                             } else {
-                                lastTapTime = now
-                                scope.launch {
-                                    kotlinx.coroutines.delay(DOUBLE_TAP_TIMEOUT_MS)
-                                    if (lastTapTime != 0L) onSingleTap()
+                                flingJob?.cancel(); flingJob = null
+                                scroller.forceFinished(true)
+                                fingerDownX = event.x; fingerDownY = event.y
+                                lastFingerX = event.x; lastFingerY = event.y
+                                fingerDragged = false; fingerDown = true; secondPointerDown = false
+                                isTouchHighlighting = false
+                                fingerDownTime = event.eventTime
+                                velocitySamples.clear()
+                                velocitySamples.add(Triple(event.eventTime, event.x, event.y))
+                                // Schedule long press detection
+                                longPressJob?.cancel()
+                                longPressJob = scope.launch {
+                                    delay(LONG_PRESS_MS)
+                                    if (fingerDown && !fingerDragged && !secondPointerDown) {
+                                        isTouchHighlighting = true
+                                        onPointAdded(StrokePoint(
+                                            x = (fingerDownX - offsetX) / scale,
+                                            y = (fingerDownY - offsetY) / scale,
+                                            pressure = 0.5f,
+                                            timestamp = fingerDownTime
+                                        ))
+                                    }
                                 }
                             }
-                        } else {
-                            lastTapTime = 0L
-                            val velocity = velocityTracker.calculateVelocity()
-                            val bx = boundsX(scale)
-                            val by = boundsY(scale)
-
-                            scroller.fling(
-                                offsetX.toInt(), offsetY.toInt(),
-                                velocity.x.toInt(), velocity.y.toInt(),
-                                bx.start.toInt(), bx.endInclusive.toInt(),
-                                by.start.toInt(), by.endInclusive.toInt()
-                            )
-
-                            flingJob = scope.launch {
-                                while (scroller.computeScrollOffset()) {
-                                    offsetX = scroller.currX.toFloat()
-                                    offsetY = scroller.currY.toFloat()
-                                    withFrameNanos { }
-                                }
-                            }
+                            true
                         }
+
+                        MotionEvent.ACTION_POINTER_DOWN -> {
+                            if (!isStylusDrawing && event.pointerCount >= 2) {
+                                secondPointerDown = true; fingerDragged = true
+                                lastPointer0X = event.getX(0); lastPointer0Y = event.getY(0)
+                                lastPointer1X = event.getX(1); lastPointer1Y = event.getY(1)
+                                lastPinchDist = pinchDist(event)
+                            }
+                            true
+                        }
+
+                        MotionEvent.ACTION_POINTER_UP -> {
+                            if (!isStylusDrawing && event.pointerCount <= 2) {
+                                secondPointerDown = false
+                                val remainIdx = if (event.actionIndex == 0) 1 else 0
+                                if (remainIdx < event.pointerCount) {
+                                    lastFingerX = event.getX(remainIdx)
+                                    lastFingerY = event.getY(remainIdx)
+                                }
+                            }
+                            true
+                        }
+
+                        MotionEvent.ACTION_MOVE -> {
+                            if (isStylusDrawing) {
+                                // Track button across entire stroke
+                                if (hasStylusButton(event)) stylusButtonHeld = true
+                                for (i in 0 until event.historySize) {
+                                    onPointAdded(StrokePoint(
+                                        x = (event.getHistoricalX(i) - offsetX) / scale,
+                                        y = (event.getHistoricalY(i) - offsetY) / scale,
+                                        pressure = event.getHistoricalPressure(i),
+                                        timestamp = event.getHistoricalEventTime(i)
+                                    ))
+                                }
+                                onPointAdded(StrokePoint(
+                                    x = (event.x - offsetX) / scale,
+                                    y = (event.y - offsetY) / scale,
+                                    pressure = event.pressure,
+                                    timestamp = event.eventTime
+                                ))
+                            } else if (isTouchHighlighting) {
+                                // Touch highlight: capture points while dragging
+                                onPointAdded(StrokePoint(
+                                    x = (event.x - offsetX) / scale,
+                                    y = (event.y - offsetY) / scale,
+                                    pressure = 0.5f,
+                                    timestamp = event.eventTime
+                                ))
+                            } else if (secondPointerDown && event.pointerCount >= 2) {
+                                val p0x = event.getX(0); val p0y = event.getY(0)
+                                val p1x = event.getX(1); val p1y = event.getY(1)
+                                val newDist = pinchDist(event)
+                                if (lastPinchDist > 0f) {
+                                    val zoom = newDist / lastPinchDist
+                                    val cx = (p0x + p1x) / 2f; val cy = (p0y + p1y) / 2f
+                                    val panX = (p0x - lastPointer0X + p1x - lastPointer1X) / 2f
+                                    val panY = (p0y - lastPointer0Y + p1y - lastPointer1Y) / 2f
+                                    val newScale = (scale * zoom).coerceIn(MIN_SCALE, MAX_SCALE)
+                                    val ratio = newScale / scale
+                                    val focusX = (cx - offsetX) * (1 - ratio)
+                                    val focusY = (cy - offsetY) * (1 - ratio)
+                                    scale = newScale
+                                    offsetX = (offsetX + focusX + panX).coerceIn(boundsX(newScale))
+                                    offsetY = (offsetY + focusY + panY).coerceIn(boundsY(newScale))
+                                }
+                                lastPointer0X = p0x; lastPointer0Y = p0y
+                                lastPointer1X = p1x; lastPointer1Y = p1y
+                                lastPinchDist = newDist
+                            } else if (fingerDown) {
+                                val dx = event.x - lastFingerX; val dy = event.y - lastFingerY
+                                val totalDx = event.x - fingerDownX; val totalDy = event.y - fingerDownY
+                                if (totalDx * totalDx + totalDy * totalDy > TAP_SLOP * TAP_SLOP) {
+                                    fingerDragged = true
+                                    longPressJob?.cancel()
+                                }
+                                if (!isTouchHighlighting) {
+                                    offsetX = (offsetX + dx).coerceIn(boundsX(scale))
+                                    offsetY = (offsetY + dy).coerceIn(boundsY(scale))
+                                }
+                                lastFingerX = event.x; lastFingerY = event.y
+                                velocitySamples.add(Triple(event.eventTime, event.x, event.y))
+                                if (velocitySamples.size > 20) velocitySamples.removeAt(0)
+                            }
+                            true
+                        }
+
+                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                            longPressJob?.cancel()
+                            if (isStylusDrawing) {
+                                val wasErasing = stylusButtonHeld
+                                isStylusDrawing = false
+                                stylusButtonHeld = false
+                                val contentY = (event.y - offsetY) / scale
+                                val fullPageH = pageHeight + PAGE_GAP
+                                val pageIndex = (contentY / fullPageH).toInt().coerceIn(0, pageCount - 1)
+                                onStrokeCommitted(pageIndex, wasErasing, false)
+                            } else if (isTouchHighlighting) {
+                                isTouchHighlighting = false
+                                fingerDown = false
+                                val contentY = (event.y - offsetY) / scale
+                                val fullPageH = pageHeight + PAGE_GAP
+                                val pageIndex = (contentY / fullPageH).toInt().coerceIn(0, pageCount - 1)
+                                onStrokeCommitted(pageIndex, false, true)
+                            } else if (fingerDown) {
+                                fingerDown = false
+                                if (!fingerDragged) {
+                                    val now = System.currentTimeMillis()
+                                    if (now - lastTapTime < DOUBLE_TAP_TIMEOUT_MS) {
+                                        lastTapTime = 0L
+                                        scale = fitScale; offsetX = 0f
+                                        offsetY = offsetY.coerceIn(boundsY(fitScale))
+                                    } else {
+                                        lastTapTime = now
+                                        scope.launch {
+                                            delay(DOUBLE_TAP_TIMEOUT_MS)
+                                            if (lastTapTime != 0L) onSingleTap()
+                                        }
+                                    }
+                                } else {
+                                    lastTapTime = 0L
+                                    val vx: Float; val vy: Float
+                                    if (velocitySamples.size >= 2) {
+                                        val last = velocitySamples.last()
+                                        val prev = velocitySamples[velocitySamples.size - 2]
+                                        val dt = (last.first - prev.first).coerceAtLeast(1L)
+                                        vx = (last.second - prev.second) / dt * 1000f
+                                        vy = (last.third - prev.third) / dt * 1000f
+                                    } else { vx = 0f; vy = 0f }
+                                    val bx = boundsX(scale); val by = boundsY(scale)
+                                    scroller.fling(
+                                        offsetX.toInt(), offsetY.toInt(),
+                                        vx.toInt(), vy.toInt(),
+                                        bx.start.toInt(), bx.endInclusive.toInt(),
+                                        by.start.toInt(), by.endInclusive.toInt()
+                                    )
+                                    flingJob = scope.launch {
+                                        while (scroller.computeScrollOffset()) {
+                                            offsetX = scroller.currX.toFloat()
+                                            offsetY = scroller.currY.toFloat()
+                                            withFrameNanos { }
+                                        }
+                                    }
+                                }
+                            }
+                            true
+                        }
+
+                        else -> false
                     }
                 }
         ) {
-            SideEffect {
-                viewportManager.setZoom(scale)
-                viewportManager.updateViewport(
-                    (-offsetX / scale).toInt(),
-                    (-offsetY / scale).toInt(),
-                    ((-offsetX + viewportW) / scale).toInt(),
-                    ((-offsetY + viewportH) / scale).toInt()
-                )
-                val currentPage = ((-offsetY / scale) / (pageHeight + PAGE_GAP))
-                    .toInt()
-                    .coerceIn(0, (pageCount - 1).coerceAtLeast(0))
-                viewportManager.setCurrentPage(currentPage)
-            }
+            // Update viewport manager BEFORE computing tiles so first render has correct data
+            viewportManager.setZoom(scale)
+            viewportManager.updateViewport(
+                (-offsetX / scale).toInt(),
+                (-offsetY / scale).toInt(),
+                ((-offsetX + viewportW) / scale).toInt(),
+                ((-offsetY + viewportH) / scale).toInt()
+            )
+            val currentPage = ((-offsetY / scale) / (pageHeight + PAGE_GAP))
+                .toInt()
+                .coerceIn(0, (pageCount - 1).coerceAtLeast(0))
+            viewportManager.setCurrentPage(currentPage)
 
             LaunchedEffect(scale, offsetX, offsetY, viewportW, viewportH, pageCount, pageHeight) {
-                onTransformChanged(scale, offsetX, offsetY)
-                // Debounce persistence to actual viewport changes instead of composition churn.
                 delay(100)
-                val currentPage = ((-offsetY / scale) / (pageHeight + PAGE_GAP))
+                val page = ((-offsetY / scale) / (pageHeight + PAGE_GAP))
                     .toInt()
                     .coerceIn(0, (pageCount - 1).coerceAtLeast(0))
                 onViewportChanged(
-                    currentPage,
+                    page,
                     (-offsetX / scale).toInt(),
                     (-offsetY / scale).toInt(),
                     scale
@@ -232,9 +394,7 @@ fun PdfReaderView(
 
             LaunchedEffect(visibleTiles, prefetchTiles) {
                 val activeKeys = (visibleTiles.asSequence() + prefetchTiles.asSequence())
-                    .map { tile ->
-                        TileCache.generateKey(tile.pageIndex, tile.x, tile.y, tile.zoom)
-                    }
+                    .map { tile -> TileCache.generateKey(tile.pageIndex, tile.x, tile.y, tile.zoom) }
                     .toSet()
 
                 val staleKeys = loadedTiles.keys.filterNot(activeKeys::contains)
@@ -262,11 +422,12 @@ fun PdfReaderView(
                 }
             }
 
+            // Single Canvas: tiles + strokes drawn together to eliminate lag
             Canvas(modifier = Modifier.fillMaxSize()) {
+                // Draw tiles
                 visibleTiles.forEach { tile ->
                     val key = TileCache.generateKey(tile.pageIndex, tile.x, tile.y, tile.zoom)
                     val bitmap = loadedTiles[key] ?: return@forEach
-
                     val globalY = tile.pageIndex * (pageHeight + PAGE_GAP) + tile.y
                     drawImage(
                         image = bitmap.asImageBitmap(),
@@ -280,7 +441,32 @@ fun PdfReaderView(
                         )
                     )
                 }
+
+                // Draw persisted strokes
+                for (stroke in strokes) {
+                    drawStroke(stroke, scale, offsetX, offsetY)
+                }
+
+                // Draw live stroke
+                val currentTool = if (isTouchHighlighting) PenTool.HIGHLIGHTER else activeTool
+                if (livePoints.isNotEmpty() && (currentTool != null || stylusButtonHeld)) {
+                    val renderTool = currentTool ?: PenTool.ERASER
+                    drawLiveStroke(livePoints, activeColor, strokeWidth, renderTool, scale, offsetX, offsetY, isErasing = stylusButtonHeld)
+                }
             }
         }
     }
+}
+
+private fun pinchDist(event: MotionEvent): Float {
+    if (event.pointerCount < 2) return 0f
+    val dx = event.getX(0) - event.getX(1)
+    val dy = event.getY(0) - event.getY(1)
+    return kotlin.math.hypot(dx, dy)
+}
+
+private fun hasStylusButton(event: MotionEvent): Boolean {
+    val bs = event.buttonState
+    return (bs and MotionEvent.BUTTON_STYLUS_PRIMARY) != 0 ||
+        (bs and MotionEvent.BUTTON_SECONDARY) != 0
 }

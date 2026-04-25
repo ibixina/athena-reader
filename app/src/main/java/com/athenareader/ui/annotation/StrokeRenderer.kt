@@ -43,22 +43,36 @@ object StrokeRenderer {
         tool: PenTool,
         scale: Float,
         offsetX: Float,
-        offsetY: Float
+        offsetY: Float,
+        isErasing: Boolean = false
     ) {
         if (points.size < 2) return
 
         val path = buildPath(points, scale, offsetX, offsetY)
-        val alpha = if (tool == PenTool.HIGHLIGHTER) 0.35f else 1f
 
-        drawPath(
-            path = path,
-            color = Color(color).copy(alpha = alpha),
-            style = ComposeStroke(
-                width = strokeWidth,
-                cap = StrokeCap.Round,
-                join = StrokeJoin.Round
+        if (isErasing) {
+            // Semi-transparent dark overlay so user sees erase path
+            drawPath(
+                path = path,
+                color = Color(0xFF444444).copy(alpha = 0.25f),
+                style = ComposeStroke(
+                    width = 24f * scale,
+                    cap = StrokeCap.Round,
+                    join = StrokeJoin.Round
+                )
             )
-        )
+        } else {
+            val alpha = if (tool == PenTool.HIGHLIGHTER) 0.35f else 1f
+            drawPath(
+                path = path,
+                color = Color(color).copy(alpha = alpha),
+                style = ComposeStroke(
+                    width = strokeWidth * scale,
+                    cap = StrokeCap.Round,
+                    join = StrokeJoin.Round
+                )
+            )
+        }
     }
 
     private fun buildPath(

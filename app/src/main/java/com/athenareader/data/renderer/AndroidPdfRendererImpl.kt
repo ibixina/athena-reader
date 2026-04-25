@@ -129,12 +129,12 @@ class AndroidPdfRendererImpl @Inject constructor(
                 if (clampedRect.width() <= 1f || clampedRect.height() <= 1f) {
                     return@withLock ""
                 }
-
+                // PDFTextStripperByArea uses top-left origin, same as Android PdfRenderer
                 val pdfRegion = RectF(
                     clampedRect.left,
-                    mediaBox.height - clampedRect.bottom,
+                    clampedRect.top,
                     clampedRect.right,
-                    mediaBox.height - clampedRect.top
+                    clampedRect.bottom
                 )
 
                 val stripper = PDFTextStripperByArea().apply {

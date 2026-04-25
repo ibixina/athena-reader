@@ -8,9 +8,15 @@ import com.athenareader.domain.repository.AnnotationRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 import kotlin.math.hypot
+
+data class ToolSettings(
+    val color: Int,
+    val strokeWidth: Float
+)
 
 @HiltViewModel
 class AnnotationViewModel @Inject constructor(
@@ -20,11 +26,35 @@ class AnnotationViewModel @Inject constructor(
     private val _activeTool = MutableStateFlow<PenTool?>(null)
     val activeTool: StateFlow<PenTool?> = _activeTool
 
-    private val _activeColor = MutableStateFlow(AndroidColor.BLACK)
-    val activeColor: StateFlow<Int> = _activeColor
+    // Per-tool settings
+    private val _penSettings = MutableStateFlow(ToolSettings(AndroidColor.BLACK, 3f))
+    val penSettings: StateFlow<ToolSettings> = _penSettings
 
-    private val _strokeWidth = MutableStateFlow(4f)
-    val strokeWidth: StateFlow<Float> = _strokeWidth
+    private val _highlighterSettings = MutableStateFlow(
+        ToolSettings(AndroidColor.parseColor("#FF8F00"), 12f)
+    )
+    val highlighterSettings: StateFlow<ToolSettings> = _highlighterSettings
+
+    private val _eraserWidth = MutableStateFlow(20f)
+    val eraserWidth: StateFlow<Float> = _eraserWidth
+
+    // Convenience: active color/width based on current tool
+    val activeColor: StateFlow<Int> = combine(_activeTool, _penSettings, _highlighterSettings) { tool, pen, hl ->
+        when (tool) {
+            PenTool.FINE_PEN -> pen.color
+            PenTool.HIGHLIGHTER -> hl.color
+            else -> pen.color
+        }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, _penSettings.value.color)
+
+    val strokeWidth: StateFlow<Float> = combine(_activeTool, _penSettings, _highlighterSettings, _eraserWidth) { tool, pen, hl, ew ->
+        when (tool) {
+            PenTool.FINE_PEN -> pen.strokeWidth
+            PenTool.HIGHLIGHTER -> hl.strokeWidth
+            PenTool.ERASER -> ew
+            else -> pen.strokeWidth
+        }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, _penSettings.value.strokeWidth)
 
     private val _livePoints = MutableStateFlow<List<StrokePoint>>(emptyList())
     val livePoints: StateFlow<List<StrokePoint>> = _livePoints
@@ -63,48 +93,133 @@ class AnnotationViewModel @Inject constructor(
         _activeTool.value = if (_activeTool.value == tool) null else tool
     }
 
-    fun setColor(color: Int) { _activeColor.value = color }
-    fun setStrokeWidth(width: Float) { _strokeWidth.value = width }
+    fun setColor(tool: PenTool, color: Int) {
+        when (tool) {
+            PenTool.FINE_PEN -> _penSettings.value = _penSettings.value.copy(color = color)
+            PenTool.HIGHLIGHTER -> _highlighterSettings.value = _highlighterSettings.value.copy(color = color)
+            PenTool.ERASER -> {} // eraser has no color
+        }
+    }
+
+    fun setStrokeWidth(tool: PenTool, width: Float) {
+        when (tool) {
+            PenTool.FINE_PEN -> _penSettings.value = _penSettings.value.copy(strokeWidth = width)
+            PenTool.HIGHLIGHTER -> _highlighterSettings.value = _highlighterSettings.value.copy(strokeWidth = width)
+            PenTool.ERASER -> _eraserWidth.value = width
+        }
+    }
 
     fun addLivePoint(point: StrokePoint) {
         _livePoints.value = _livePoints.value + point
     }
 
-    fun takeCompletedStroke(pageIndex: Int): Stroke? {
+    fun takeCompletedStroke(pageIndex: Int, forceTool: PenTool? = null): Stroke? {
         val points = PenInputProcessor.simplify(_livePoints.value)
         _livePoints.value = emptyList()
         if (points.size < 2) return null
 
-        val tool = _activeTool.value ?: return null
+        val tool = forceTool ?: _activeTool.value ?: return null
+        val color = when (tool) {
+            PenTool.FINE_PEN -> _penSettings.value.color
+            PenTool.HIGHLIGHTER -> _highlighterSettings.value.color
+            PenTool.ERASER -> _penSettings.value.color
+        }
+        val width = when (tool) {
+            PenTool.FINE_PEN -> _penSettings.value.strokeWidth
+            PenTool.HIGHLIGHTER -> _highlighterSettings.value.strokeWidth
+            PenTool.ERASER -> _eraserWidth.value
+        }
         return Stroke(
             documentId = _documentId,
             pageIndex = pageIndex,
             tool = tool,
-            color = _activeColor.value,
-            strokeWidth = _strokeWidth.value,
+            color = color,
+            strokeWidth = width,
             points = points
         )
     }
 
     fun commitStroke(pageIndex: Int) {
         val stroke = takeCompletedStroke(pageIndex) ?: return
-
         viewModelScope.launch { repository.saveStroke(stroke) }
     }
 
     fun saveStroke(stroke: Stroke) {
+        // Optimistic update: show stroke immediately without waiting for Room round-trip
+        _strokes.value = _strokes.value + stroke
         viewModelScope.launch { repository.saveStroke(stroke) }
     }
 
+    // Highlight merging: buffer highlights arriving within MERGE_WINDOW_MS
+    private var pendingHighlightText = StringBuilder()
+    private var pendingHighlightPage = -1
+    private var pendingHighlightColor = 0
+    private var pendingHighlightRanges = mutableListOf<String>()
+    private var highlightFlushJob: Job? = null
+    private val MERGE_WINDOW_MS = 4000L
+
     fun commitHighlight(pageIndex: Int, extractedText: String, rangeData: String = "") {
+        // If same page and within time window, merge
+        if (pageIndex == pendingHighlightPage && highlightFlushJob != null) {
+            highlightFlushJob?.cancel()
+            if (pendingHighlightText.isNotEmpty()) pendingHighlightText.append(" ")
+            pendingHighlightText.append(extractedText)
+            if (rangeData.isNotEmpty()) pendingHighlightRanges.add(rangeData)
+        } else {
+            // Flush any previous pending highlight
+            flushPendingHighlight()
+            pendingHighlightPage = pageIndex
+            pendingHighlightColor = activeColor.value
+            pendingHighlightText = StringBuilder(extractedText)
+            pendingHighlightRanges = if (rangeData.isNotEmpty()) mutableListOf(rangeData) else mutableListOf()
+        }
+
+        // Schedule flush after delay
+        highlightFlushJob = viewModelScope.launch {
+            delay(MERGE_WINDOW_MS)
+            flushPendingHighlight()
+        }
+    }
+
+    private fun flushPendingHighlight() {
+        highlightFlushJob?.cancel()
+        highlightFlushJob = null
+        val text = pendingHighlightText.toString()
+        if (text.isBlank() || pendingHighlightPage < 0) return
+
+        val mergedRange = if (pendingHighlightRanges.isNotEmpty()) {
+            mergeRanges(pendingHighlightRanges)
+        } else ""
+
         val highlight = Highlight(
             documentId = _documentId,
-            pageIndex = pageIndex,
-            color = _activeColor.value,
-            extractedText = extractedText,
-            rangeData = rangeData
+            pageIndex = pendingHighlightPage,
+            color = pendingHighlightColor,
+            extractedText = text,
+            rangeData = mergedRange
         )
         viewModelScope.launch { repository.saveHighlight(highlight) }
+        pendingHighlightText.clear()
+        pendingHighlightPage = -1
+        pendingHighlightRanges.clear()
+    }
+
+    private fun mergeRanges(ranges: List<String>): String {
+        var minX = Float.MAX_VALUE; var minY = Float.MAX_VALUE
+        var maxX = Float.MIN_VALUE; var maxY = Float.MIN_VALUE
+        for (r in ranges) {
+            val parts = r.split(',')
+            if (parts.size != 4) continue
+            val x = parts[0].toFloatOrNull() ?: continue
+            val y = parts[1].toFloatOrNull() ?: continue
+            val w = parts[2].toFloatOrNull() ?: continue
+            val h = parts[3].toFloatOrNull() ?: continue
+            if (x < minX) minX = x
+            if (y < minY) minY = y
+            if (x + w > maxX) maxX = x + w
+            if (y + h > maxY) maxY = y + h
+        }
+        return "${minX.toInt()},${minY.toInt()},${(maxX - minX).toInt()},${(maxY - minY).toInt()}"
     }
 
     fun updateHighlightNote(highlight: Highlight, note: String) {
@@ -116,16 +231,11 @@ class AnnotationViewModel @Inject constructor(
     }
 
     fun eraseWithCurrentStroke(pageIndex: Int, pageHeight: Int, pageGap: Int) {
-        if (_activeTool.value != PenTool.ERASER) {
-            _livePoints.value = emptyList()
-            return
-        }
-
         val eraserPoints = PenInputProcessor.simplify(_livePoints.value)
         _livePoints.value = emptyList()
         if (eraserPoints.isEmpty()) return
 
-        val hitRadius = (_strokeWidth.value * 2f).coerceAtLeast(24f)
+        val hitRadius = (strokeWidth.value * 2f).coerceAtLeast(24f)
         val hitStrokes = _strokes.value.filter { stroke ->
             stroke.pageIndex == pageIndex && stroke.points.any { strokePoint ->
                 eraserPoints.any { eraserPoint ->

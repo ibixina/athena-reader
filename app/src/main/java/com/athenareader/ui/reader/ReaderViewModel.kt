@@ -45,14 +45,13 @@ class ReaderViewModel @Inject constructor(
                     val pageInfo = if (count > 0) pdfRenderer.getPageInfo(0) else null
                     val width = pageInfo?.width ?: 1000
                     val height = pageInfo?.height ?: 1400
-                    val progress = savedProgress ?: ReadingProgress(documentId = document.id)
                     _uiState.value = ReaderUiState.PdfActive(
                         document = document,
                         pageCount = count,
                         pageWidth = width,
                         pageHeight = height,
                         outline = buildPdfOutline(count),
-                        progress = progress
+                        progress = savedProgress
                     )
                 } else {
                     val metadata = epubRenderer.openDocument(document.filePath)
@@ -212,7 +211,7 @@ sealed class ReaderUiState {
         val pageWidth: Int,
         val pageHeight: Int,
         val outline: List<ReaderOutlineItem>,
-        val progress: ReadingProgress
+        val progress: ReadingProgress?
     ) : ReaderUiState()
 
     data class EpubActive(

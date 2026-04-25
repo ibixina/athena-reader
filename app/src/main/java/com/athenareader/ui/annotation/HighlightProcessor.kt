@@ -13,6 +13,10 @@ object HighlightProcessor {
         val height: Int
     )
 
+    private const val MIN_LINE_HEIGHT = 16f
+    // Horizontal padding in PDF points to capture edge characters
+    private const val H_PAD = 6f
+
     fun computeBounds(
         points: List<StrokePoint>,
         pageIndex: Int,
@@ -35,8 +39,20 @@ object HighlightProcessor {
             if (localY > maxY) maxY = localY
         }
 
-        val x = minX.toInt()
-        val y = minY.toInt()
+        // Expand horizontally to capture edge characters
+        minX -= H_PAD
+        maxX += H_PAD
+
+        // Expand vertically so the region covers actual text glyphs
+        val height = maxY - minY
+        if (height < MIN_LINE_HEIGHT) {
+            val expand = (MIN_LINE_HEIGHT - height) / 2f
+            minY -= expand
+            maxY += expand
+        }
+
+        val x = minX.toInt().coerceAtLeast(0)
+        val y = minY.toInt().coerceAtLeast(0)
         return BoundingBox(pageIndex, x, y, (maxX - minX).toInt().coerceAtLeast(1), (maxY - minY).toInt().coerceAtLeast(1))
     }
 
@@ -44,6 +60,16 @@ object HighlightProcessor {
         pdfRenderer: PdfRenderer,
         bounds: BoundingBox
     ): String {
-        return pdfRenderer.extractText(bounds.pageIndex, bounds.x, bounds.y, bounds.width, bounds.height)
+        val raw = pdfRenderer.extractText(bounds.pageIndex, bounds.x, bounds.y, bounds.width, bounds.height)
+        return sanitize(raw)
+    }
+
+    private fun sanitize(text: String): String {
+        return text
+            .replace("\r\n", " ")
+            .replace("\r", " ")
+            .replace("\n", " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
     }
 }

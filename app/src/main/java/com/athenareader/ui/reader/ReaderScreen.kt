@@ -20,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -29,7 +30,6 @@ import com.athenareader.domain.model.PenTool
 import com.athenareader.domain.model.ReaderSettings
 import com.athenareader.ui.annotation.AnnotationToolbar
 import com.athenareader.ui.annotation.AnnotationViewModel
-import com.athenareader.ui.annotation.DrawingOverlay
 import com.athenareader.ui.annotation.NotesPanel
 import com.athenareader.ui.renderer.ViewportManager
 import com.athenareader.ui.renderer.pdf.TileRendererPool
@@ -49,22 +49,17 @@ fun ReaderScreen(
     val scope = rememberCoroutineScope()
     val uiState by viewModel.uiState.collectAsState()
     var showHeader by remember { mutableStateOf(false) }
-    var showToolbar by remember { mutableStateOf(false) }
     var showNotes by remember { mutableStateOf(false) }
     var showOutline by remember { mutableStateOf(false) }
     var currentPage by remember { mutableIntStateOf(0) }
-    var requestedPageIndex by remember { mutableStateOf<Int?>(null) }
-    var overlayScale by remember { mutableFloatStateOf(1f) }
-    var overlayOffsetX by remember { mutableFloatStateOf(0f) }
-    var overlayOffsetY by remember { mutableFloatStateOf(0f) }
+    var requestedPageJump by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    var jumpCounter by remember { mutableIntStateOf(0) }
     var editingHighlight by remember { mutableStateOf<com.athenareader.domain.model.Highlight?>(null) }
     var editedNote by remember { mutableStateOf("") }
 
     val activeTool by annotationViewModel.activeTool.collectAsState()
-    val activeColor by annotationViewModel.activeColor.collectAsState()
-    val strokeWidth by annotationViewModel.strokeWidth.collectAsState()
-    val livePoints by annotationViewModel.livePoints.collectAsState()
-    val strokes by annotationViewModel.strokes.collectAsState()
+    val penSettings by annotationViewModel.penSettings.collectAsState()
+    val highlighterSettings by annotationViewModel.highlighterSettings.collectAsState()
     val highlights by annotationViewModel.highlights.collectAsState()
 
     // Load annotations when document is ready
@@ -104,7 +99,7 @@ fun ReaderScreen(
         when (val state = uiState) {
             is ReaderUiState.Loading -> CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
             is ReaderUiState.PdfActive -> {
-                // PDF reader
+                // PDF reader — handles stylus input and renders strokes in the same Canvas
                 PdfReaderView(
                     document = state.document,
                     pageCount = state.pageCount,
@@ -113,46 +108,25 @@ fun ReaderScreen(
                     tilePool = tilePool,
                     viewportManager = viewportManager,
                     initialProgress = state.progress,
-                    requestedPageIndex = requestedPageIndex,
-                    onTransformChanged = { scale, offsetX, offsetY ->
-                        overlayScale = scale
-                        overlayOffsetX = offsetX
-                        overlayOffsetY = offsetY
-                    },
-                    onViewportChanged = { page, scrollX, scrollY, zoom ->
-                        currentPage = page
-                        viewModel.persistPdfViewport(page, scrollX, scrollY, zoom)
-                    },
-                    onSingleTap = { showHeader = !showHeader }
-                )
-
-                // Drawing overlay on top of PDF
-                // TODO: pass actual scale/offset from PdfReaderView once exposed via state hoisting
-                DrawingOverlay(
-                    strokes = strokes,
-                    livePoints = livePoints,
-                    activeTool = activeTool,
-                    activeColor = activeColor,
-                    strokeWidth = strokeWidth,
-                    scale = overlayScale,
-                    offsetX = overlayOffsetX,
-                    offsetY = overlayOffsetY,
-                    pageWidth = state.pageWidth,
-                    pageHeight = state.pageHeight,
-                    pageGap = PAGE_GAP,
-                    pageCount = state.pageCount,
+                    requestedPageJump = requestedPageJump,
+                    activeToolFlow = annotationViewModel.activeTool,
+                    strokesFlow = annotationViewModel.strokes,
+                    livePointsFlow = annotationViewModel.livePoints,
+                    activeColorFlow = annotationViewModel.activeColor,
+                    strokeWidthFlow = annotationViewModel.strokeWidth,
                     onPointAdded = { annotationViewModel.addLivePoint(it) },
-                    onStrokeCommitted = { pageIndex ->
-                        if (activeTool == PenTool.ERASER) {
+                    onStrokeCommitted = { pageIndex, isStylusButtonErasing, isTouchHighlight ->
+                        if (isStylusButtonErasing || activeTool == PenTool.ERASER) {
                             annotationViewModel.eraseWithCurrentStroke(
                                 pageIndex = pageIndex,
                                 pageHeight = state.pageHeight,
                                 pageGap = PAGE_GAP
                             )
-                            return@DrawingOverlay
+                            return@PdfReaderView
                         }
 
-                        val stroke = annotationViewModel.takeCompletedStroke(pageIndex)
+                        val forceTool = if (isTouchHighlight) PenTool.HIGHLIGHTER else null
+                        val stroke = annotationViewModel.takeCompletedStroke(pageIndex, forceTool)
                         if (stroke != null) {
                             annotationViewModel.saveStroke(stroke)
 
@@ -172,7 +146,12 @@ fun ReaderScreen(
                                 }
                             }
                         }
-                    }
+                    },
+                    onViewportChanged = { page, scrollX, scrollY, zoom ->
+                        currentPage = page
+                        viewModel.persistPdfViewport(page, scrollX, scrollY, zoom)
+                    },
+                    onSingleTap = { showHeader = !showHeader }
                 )
             }
             is ReaderUiState.EpubActive -> EpubReaderView(
@@ -212,7 +191,6 @@ fun ReaderScreen(
                 },
                 actions = {
                     IconButton(onClick = { showOutline = !showOutline }) { Text("☰") }
-                    IconButton(onClick = { showToolbar = !showToolbar }) { Text("✏️") }
                     IconButton(onClick = { showNotes = !showNotes }) { Text("📝") }
                 }
             )
@@ -224,7 +202,8 @@ fun ReaderScreen(
                 visible = showNotes,
                 highlights = highlights,
                 onNavigateToPage = {
-                    requestedPageIndex = it
+                    jumpCounter++
+                    requestedPageJump = Pair(it, jumpCounter)
                     showNotes = false
                 },
                 onEditNote = { highlight ->
@@ -254,7 +233,10 @@ fun ReaderScreen(
                 onSelect = { item ->
                     when (val state = uiState) {
                         is ReaderUiState.PdfActive -> {
-                            requestedPageIndex = item.pageIndex
+                            item.pageIndex?.let { pageIndex ->
+                                jumpCounter++
+                                requestedPageJump = Pair(pageIndex, jumpCounter)
+                            }
                         }
                         is ReaderUiState.EpubActive -> {
                             item.chapterId?.let(viewModel::openChapter)
@@ -268,32 +250,25 @@ fun ReaderScreen(
         }
 
         if (settings.showPageNumbers && uiState is ReaderUiState.PdfActive) {
-            Surface(
+            val pdfState = uiState as ReaderUiState.PdfActive
+            Text(
+                text = "${currentPage + 1} / ${pdfState.pageCount}",
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
                 modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(top = 72.dp, end = 16.dp),
-                shape = RoundedCornerShape(999.dp),
-                tonalElevation = 6.dp
-            ) {
-                Text(
-                    text = "Page ${currentPage + 1}",
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
-                )
-            }
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 12.dp, bottom = 8.dp)
+            )
         }
 
         if (showHeader && settings.showPageScrubber) {
             val state = uiState as? ReaderUiState.PdfActive
             if (state != null) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(bottom = if (showToolbar) 88.dp else 0.dp)
-                ) {
+                Box(modifier = Modifier.align(Alignment.BottomCenter)) {
                     PageScrubber(
                         pageCount = state.pageCount,
                         currentPage = currentPage,
-                        onPageSelected = { requestedPageIndex = it }
+                        onPageSelected = { jumpCounter++; requestedPageJump = Pair(it, jumpCounter) }
                     )
                 }
             }
@@ -329,16 +304,18 @@ fun ReaderScreen(
             )
         }
 
-        // Annotation toolbar (bottom)
-        Box(modifier = Modifier.align(Alignment.BottomCenter)) {
+        // Floating annotation toolbar (right edge)
+        if (uiState is ReaderUiState.PdfActive) {
             AnnotationToolbar(
-                visible = showToolbar,
                 activeTool = activeTool,
-                activeColor = activeColor,
-                strokeWidth = strokeWidth,
+                penSettings = penSettings,
+                highlighterSettings = highlighterSettings,
                 onToolSelected = { annotationViewModel.selectTool(it) },
-                onColorSelected = { annotationViewModel.setColor(it) },
-                onWidthChanged = { annotationViewModel.setStrokeWidth(it) }
+                onColorSelected = { tool, color -> annotationViewModel.setColor(tool, color) },
+                onWidthChanged = { tool, width -> annotationViewModel.setStrokeWidth(tool, width) },
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 80.dp, end = 8.dp)
             )
         }
     }

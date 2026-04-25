@@ -11,6 +11,9 @@ import com.athenareader.domain.model.Tile
 import com.athenareader.domain.renderer.PdfRenderer as IPdfRenderer
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.text.PDFTextStripperByArea
+import com.tom_roush.pdfbox.pdmodel.interactive.action.PDActionGoTo
+import com.tom_roush.pdfbox.pdmodel.interactive.documentnavigation.destination.PDPageDestination
+import com.tom_roush.pdfbox.pdmodel.interactive.documentnavigation.outline.PDOutlineItem
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -32,6 +35,7 @@ class AndroidPdfRendererImpl @Inject constructor(
     private var currentPage: PdfRenderer.Page? = null
     private var currentPageIndex: Int = -1
     private var textDocument: PDDocument? = null
+    private var currentFilePath: String? = null
 
     override suspend fun openDocument(filePath: String) {
         mutex.withLock {
@@ -39,17 +43,31 @@ class AndroidPdfRendererImpl @Inject constructor(
                 try {
                     val uri = Uri.parse(filePath)
                     closeOpenDocuments()
+                    currentFilePath = filePath
                     fileDescriptor = context.contentResolver.openFileDescriptor(uri, "r")
                     fileDescriptor?.let {
                         pdfRenderer = PdfRenderer(it)
                     }
-                    context.contentResolver.openInputStream(uri)?.use { input ->
-                        textDocument = PDDocument.load(input)
-                    }
-                } catch (e: Exception) {
-                    e.printStackTrace()
+                } catch (t: Throwable) {
+                    t.printStackTrace()
                 }
             }
+        }
+    }
+
+    private suspend fun getTextDocument(): PDDocument? {
+        textDocument?.let { return it }
+        val filePath = currentFilePath ?: return null
+        return withContext(Dispatchers.IO) {
+            try {
+                val uri = Uri.parse(filePath)
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    textDocument = PDDocument.load(input, com.tom_roush.pdfbox.io.MemoryUsageSetting.setupTempFileOnly())
+                }
+            } catch (t: Throwable) {
+                t.printStackTrace()
+            }
+            textDocument
         }
     }
 
@@ -113,8 +131,8 @@ class AndroidPdfRendererImpl @Inject constructor(
     }
 
     override suspend fun extractText(pageIndex: Int, x: Int, y: Int, width: Int, height: Int): String = withContext(Dispatchers.IO) {
+        val document = getTextDocument() ?: return@withContext ""
         mutex.withLock {
-            val document = textDocument ?: return@withLock ""
             if (pageIndex !in 0 until document.numberOfPages) return@withLock ""
 
             try {
@@ -151,6 +169,60 @@ class AndroidPdfRendererImpl @Inject constructor(
         }
     }
 
+    override suspend fun getOutline(): List<com.athenareader.domain.model.ReaderOutlineItem> = withContext(Dispatchers.IO) {
+        val doc = getTextDocument() ?: return@withContext emptyList()
+        mutex.withLock {
+            val outline = doc.documentCatalog.documentOutline ?: return@withLock emptyList()
+            val results = mutableListOf<com.athenareader.domain.model.ReaderOutlineItem>()
+            var idCounter = 0
+
+            fun traverse(item: PDOutlineItem?, depth: Int) {
+                var current = item
+                while (current != null) {
+                    val title = current.title ?: "Untitled"
+                    val indent = "  ".repeat(depth)
+                    var pageIndex: Int? = null
+
+                    try {
+                        var dest = current.destination
+                        if (dest == null && current.action is PDActionGoTo) {
+                            dest = (current.action as PDActionGoTo).destination
+                        }
+                        if (dest is PDPageDestination) {
+                            pageIndex = dest.retrievePageNumber()
+                            if (pageIndex == -1) {
+                                val page = dest.page
+                                if (page != null) {
+                                    pageIndex = doc.pages.indexOf(page)
+                                }
+                            }
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+
+                    results.add(
+                        com.athenareader.domain.model.ReaderOutlineItem(
+                            id = "outline-${idCounter++}",
+                            title = "$indent$title",
+                            pageIndex = if (pageIndex != null && pageIndex >= 0) pageIndex else null
+                        )
+                    )
+
+                    traverse(current.firstChild, depth + 1)
+                    current = current.nextSibling
+                }
+            }
+
+            try {
+                traverse(outline.firstChild, 0)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+            results
+        }
+    }
+
     private fun closeOpenDocuments() {
         currentPage?.close()
         currentPage = null
@@ -162,6 +234,7 @@ class AndroidPdfRendererImpl @Inject constructor(
         pdfRenderer = null
         fileDescriptor = null
         textDocument = null
+        currentFilePath = null
     }
 
     private companion object {

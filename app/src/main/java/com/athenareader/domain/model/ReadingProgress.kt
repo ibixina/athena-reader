@@ -6,6 +6,7 @@ data class ReadingProgress(
     val scrollX: Int = 0,
     val scrollY: Int = 0,
     val zoom: Float = 1.0f,
-    val chapterId: String? = null
+    val chapterId: String? = null,
+    val totalPages: Int = 0
 )
 

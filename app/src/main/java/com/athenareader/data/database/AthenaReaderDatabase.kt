@@ -18,7 +18,7 @@ import com.athenareader.data.entity.ReadingProgressEntity
         AnnotationEntity::class,
         HighlightEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class AthenaReaderDatabase : RoomDatabase() {

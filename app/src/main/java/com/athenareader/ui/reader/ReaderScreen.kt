@@ -12,6 +12,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.runtime.*
 import kotlinx.coroutines.launch
 import androidx.compose.ui.graphics.Color
@@ -187,11 +192,11 @@ fun ReaderScreen(
                     Text(title)
                 },
                 navigationIcon = {
-                    IconButton(onClick = onBack) { Text("←") }
+                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
                 },
                 actions = {
-                    IconButton(onClick = { showOutline = !showOutline }) { Text("☰") }
-                    IconButton(onClick = { showNotes = !showNotes }) { Text("📝") }
+                    IconButton(onClick = { showOutline = !showOutline }) { Icon(Icons.Default.Menu, contentDescription = "Outline") }
+                    IconButton(onClick = { showNotes = !showNotes }) { Icon(Icons.Default.Edit, contentDescription = "Notes") }
                 }
             )
         }

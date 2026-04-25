@@ -33,5 +33,8 @@ data class ReadingProgressEntity(
     val zoom: Float = 1.0f,
     
     @ColumnInfo(name = "chapter_id")
-    val chapterId: String? = null
+    val chapterId: String? = null,
+
+    @ColumnInfo(name = "total_pages")
+    val totalPages: Int = 0
 )

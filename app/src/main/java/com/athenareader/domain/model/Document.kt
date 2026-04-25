@@ -6,7 +6,8 @@ data class Document(
     val filePath: String,
     val hash: String,
     val format: DocumentFormat,
-    val lastOpened: Long
+    val lastOpened: Long,
+    val progress: Float = 0f
 )
 
 enum class DocumentFormat {

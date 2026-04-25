@@ -10,7 +10,8 @@ fun ReadingProgressEntity.toDomain(): ReadingProgress {
         scrollX = scrollX,
         scrollY = scrollY,
         zoom = zoom,
-        chapterId = chapterId
+        chapterId = chapterId,
+        totalPages = totalPages
     )
 }
 
@@ -21,7 +22,8 @@ fun ReadingProgress.toEntity(): ReadingProgressEntity {
         scrollX = scrollX,
         scrollY = scrollY,
         zoom = zoom,
-        chapterId = chapterId
+        chapterId = chapterId,
+        totalPages = totalPages
     )
 }
 

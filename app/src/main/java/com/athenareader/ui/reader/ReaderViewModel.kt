@@ -45,6 +45,7 @@ class ReaderViewModel @Inject constructor(
                     val pageInfo = if (count > 0) pdfRenderer.getPageInfo(0) else null
                     val width = pageInfo?.width ?: 1000
                     val height = pageInfo?.height ?: 1400
+                    
                     _uiState.value = ReaderUiState.PdfActive(
                         document = document,
                         pageCount = count,
@@ -53,6 +54,21 @@ class ReaderViewModel @Inject constructor(
                         outline = buildPdfOutline(count),
                         progress = savedProgress
                     )
+
+                    // Fetch the real outline asynchronously
+                    launch {
+                        try {
+                            val actualOutline = pdfRenderer.getOutline()
+                            if (actualOutline.isNotEmpty()) {
+                                val currentState = _uiState.value
+                                if (currentState is ReaderUiState.PdfActive && currentState.document.id == document.id) {
+                                    _uiState.value = currentState.copy(outline = actualOutline)
+                                }
+                            }
+                        } catch (t: Throwable) {
+                            t.printStackTrace()
+                        }
+                    }
                 } else {
                     val metadata = epubRenderer.openDocument(document.filePath)
                     val currentChapter = metadata.chapters.firstOrNull { it.id == savedProgress?.chapterId }
@@ -81,8 +97,8 @@ class ReaderViewModel @Inject constructor(
                         )
                     )
                 }
-            } catch (e: Exception) {
-                _uiState.value = ReaderUiState.Error(e.message ?: "Unknown error")
+            } catch (t: Throwable) {
+                _uiState.value = ReaderUiState.Error(t.message ?: "Unknown error")
             }
         }
     }
@@ -104,12 +120,14 @@ class ReaderViewModel @Inject constructor(
 
     fun persistPdfViewport(pageIndex: Int, scrollX: Int, scrollY: Int, zoom: Float) {
         val document = currentDocument ?: return
+        val state = _uiState.value as? ReaderUiState.PdfActive ?: return
         val progress = ReadingProgress(
             documentId = document.id,
             pageIndex = pageIndex,
             scrollX = scrollX,
             scrollY = scrollY,
-            zoom = zoom
+            zoom = zoom,
+            totalPages = state.pageCount
         )
         scheduleProgressSave(progress)
     }

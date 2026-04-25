@@ -7,11 +7,11 @@ plugins {
 }
 
 android {
-    namespace = "com.inkreader"
+    namespace = "com.athenareader"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.inkreader"
+        applicationId = "com.athenareader"
         minSdk = 24
         targetSdk = 35
         versionCode = 1

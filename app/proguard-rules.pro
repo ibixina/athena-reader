@@ -8,6 +8,6 @@
 #   http://developer.android.com/guide/developing/tools-proguard.html
 
 # Keep Hilt/Dagger classes
--keep class com.inkreader.** { *; }
+-keep class com.athenareader.** { *; }
 -keepattributes *Annotation*
 -keep class dagger.hilt.internal.GeneratedEntryPoint { *; }

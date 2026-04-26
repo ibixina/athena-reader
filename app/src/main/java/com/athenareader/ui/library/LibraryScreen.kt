@@ -18,10 +18,12 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -40,7 +42,8 @@ fun LibraryScreen(
     onPickFolder: () -> Unit,
     onPickFiles: () -> Unit,
     onOpenSettings: () -> Unit,
-    onDocumentClick: (Document) -> Unit
+    onDocumentClick: (Document) -> Unit,
+    coverCache: com.athenareader.core.cache.CoverCache? = null
 ) {
     val documents by viewModel.documents.collectAsState()
     val selectedUri by viewModel.selectedUri.collectAsState()
@@ -145,7 +148,7 @@ fun LibraryScreen(
                     modifier = Modifier.fillMaxSize()
                 ) {
                     items(documents) { doc ->
-                        BookShelfItem(doc, onClick = { onDocumentClick(doc) })
+                        BookShelfItem(doc, onClick = { onDocumentClick(doc) }, coverCache = coverCache)
                     }
                 }
             }
@@ -154,7 +157,7 @@ fun LibraryScreen(
 }
 
 @Composable
-fun BookShelfItem(document: Document, onClick: () -> Unit) {
+fun BookShelfItem(document: Document, onClick: () -> Unit, coverCache: com.athenareader.core.cache.CoverCache? = null) {
     Column(
         modifier = Modifier
             .width(140.dp)
@@ -172,7 +175,8 @@ fun BookShelfItem(document: Document, onClick: () -> Unit) {
             if (document.format == DocumentFormat.PDF) {
                 PdfCoverImage(
                     uriString = document.filePath,
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier.fillMaxSize(),
+                    coverCache = coverCache
                 )
             } else {
                 Text(
@@ -201,9 +205,11 @@ fun BookShelfItem(document: Document, onClick: () -> Unit) {
             progress = { document.progress },
             modifier = Modifier
                 .fillMaxWidth()
-                .height(4.dp),
+                .height(4.dp)
+                .clip(RoundedCornerShape(2.dp)),
             color = MaterialTheme.colorScheme.onSurface,
             trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f),
+            drawStopIndicator = {}
         )
         
         Spacer(modifier = Modifier.height(4.dp))
@@ -213,7 +219,7 @@ fun BookShelfItem(document: Document, onClick: () -> Unit) {
             text = document.name,
             style = MaterialTheme.typography.bodyMedium,
             fontWeight = FontWeight.Medium,
-            maxLines = 2,
+            maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             color = MaterialTheme.colorScheme.onSurface
         )
@@ -221,12 +227,22 @@ fun BookShelfItem(document: Document, onClick: () -> Unit) {
 }
 
 @Composable
-fun PdfCoverImage(uriString: String, modifier: Modifier = Modifier) {
-    var bitmap by remember(uriString) { mutableStateOf<ImageBitmap?>(null) }
+fun PdfCoverImage(uriString: String, modifier: Modifier = Modifier, coverCache: com.athenareader.core.cache.CoverCache? = null) {
+    var bitmap by remember { mutableStateOf<ImageBitmap?>(null) }
     val context = LocalContext.current
-    
+
+    val cacheKey = uriString
+
     LaunchedEffect(uriString) {
         withContext(Dispatchers.IO) {
+            val cached = coverCache?.get(cacheKey)
+            if (cached != null) {
+                withContext(Dispatchers.Main) {
+                    bitmap = cached.asImageBitmap()
+                }
+                return@withContext
+            }
+
             try {
                 val uri = Uri.parse(uriString)
                 context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
@@ -240,6 +256,9 @@ fun PdfCoverImage(uriString: String, modifier: Modifier = Modifier) {
                         bmp.eraseColor(android.graphics.Color.WHITE)
                         page.render(bmp, null, null, android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
                         page.close()
+
+                        coverCache?.put(cacheKey, bmp)
+
                         withContext(Dispatchers.Main) {
                             bitmap = bmp.asImageBitmap()
                         }

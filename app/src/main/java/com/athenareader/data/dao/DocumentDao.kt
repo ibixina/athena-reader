@@ -23,4 +23,7 @@ interface DocumentDao {
 
     @Query("SELECT * FROM documents WHERE id = :id")
     suspend fun getDocumentById(id: Long): DocumentEntity?
+
+    @Query("UPDATE documents SET last_opened = :timestamp WHERE id = :id")
+    suspend fun updateLastOpened(id: Long, timestamp: Long)
 }

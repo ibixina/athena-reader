@@ -111,4 +111,7 @@ class DocumentRepositoryImpl @Inject constructor(
             }
         }
     }
+    override suspend fun updateLastOpened(documentId: Long, timestamp: Long) {
+        documentDao.updateLastOpened(documentId, timestamp)
+    }
 }

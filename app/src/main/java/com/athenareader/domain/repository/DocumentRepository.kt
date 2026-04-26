@@ -10,4 +10,5 @@ interface DocumentRepository {
     suspend fun deleteDocument(document: Document)
     suspend fun scanForDocuments(folderUri: String): List<Document>
     suspend fun getDocumentFromUri(uriString: String): Document?
+    suspend fun updateLastOpened(documentId: Long, timestamp: Long)
 }

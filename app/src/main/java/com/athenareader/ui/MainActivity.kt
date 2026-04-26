@@ -4,6 +4,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -21,6 +22,7 @@ import com.athenareader.ui.renderer.ViewportManager
 import com.athenareader.ui.renderer.pdf.TileRendererPool
 import com.athenareader.ui.settings.SettingsScreen
 import com.athenareader.ui.settings.SettingsViewModel
+import com.athenareader.core.cache.CoverCache
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 
@@ -29,14 +31,15 @@ class MainActivity : ComponentActivity() {
 
     @Inject lateinit var tilePool: TileRendererPool
     @Inject lateinit var viewportManager: ViewportManager
+    @Inject lateinit var coverCache: CoverCache
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         
         setContent {
-            InkReaderTheme {
-                AppNavigation(tilePool, viewportManager)
+            AthenaReaderTheme {
+                AppNavigation(tilePool, viewportManager, coverCache)
             }
         }
     }
@@ -45,7 +48,8 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun AppNavigation(
     tilePool: TileRendererPool,
-    viewportManager: ViewportManager
+    viewportManager: ViewportManager,
+    coverCache: CoverCache
 ) {
     var destination by remember { mutableStateOf<AppDestination>(AppDestination.Library) }
     val libraryViewModel: LibraryViewModel = hiltViewModel()
@@ -76,6 +80,12 @@ fun AppNavigation(
                 )
             }
             libraryViewModel.addFiles(uris.map { it.toString() })
+        }
+    }
+
+    if (destination != AppDestination.Library) {
+        BackHandler {
+            destination = AppDestination.Library
         }
     }
 
@@ -116,7 +126,7 @@ fun AppNavigation(
 }
 
 @Composable
-fun InkReaderTheme(content: @Composable () -> Unit) {
+fun AthenaReaderTheme(content: @Composable () -> Unit) {
     androidx.compose.material3.MaterialTheme(
         content = content
     )

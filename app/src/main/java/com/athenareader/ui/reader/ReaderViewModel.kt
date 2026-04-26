@@ -11,6 +11,7 @@ import com.athenareader.domain.model.Stroke
 import com.athenareader.domain.renderer.EpubRenderer
 import com.athenareader.domain.renderer.PdfRenderer
 import com.athenareader.domain.repository.ReadingProgressRepository
+import com.athenareader.domain.repository.DocumentRepository
 import com.athenareader.ui.annotation.HighlightProcessor
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
@@ -24,7 +25,8 @@ import javax.inject.Inject
 class ReaderViewModel @Inject constructor(
     private val pdfRenderer: PdfRenderer,
     private val epubRenderer: EpubRenderer,
-    private val readingProgressRepository: ReadingProgressRepository
+    private val readingProgressRepository: ReadingProgressRepository,
+    private val documentRepository: DocumentRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow<ReaderUiState>(ReaderUiState.Loading)
@@ -37,6 +39,7 @@ class ReaderViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.value = ReaderUiState.Loading
             currentDocument = document
+            documentRepository.updateLastOpened(document.id, System.currentTimeMillis())
             try {
                 val savedProgress = readingProgressRepository.getProgress(document.id)
                 if (document.format == DocumentFormat.PDF) {

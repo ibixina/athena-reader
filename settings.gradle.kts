@@ -19,5 +19,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "InkReader"
+rootProject.name = "AthenaReader"
 include(":app")

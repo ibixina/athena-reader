@@ -309,15 +309,15 @@ fun ReaderScreen(
             )
         }
 
-        // Floating annotation toolbar (right edge)
+        // Floating annotation toolbar (left edge)
         if (uiState is ReaderUiState.PdfActive) {
             androidx.compose.animation.AnimatedVisibility(
                 visible = showHeader,
                 enter = androidx.compose.animation.fadeIn(),
                 exit = androidx.compose.animation.fadeOut(),
                 modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(top = 80.dp, end = 8.dp)
+                    .align(Alignment.CenterStart)
+                    .padding(start = 16.dp)
             ) {
                 AnnotationToolbar(
                     activeTool = activeTool,

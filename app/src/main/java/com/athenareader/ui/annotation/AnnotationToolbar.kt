@@ -48,7 +48,27 @@ fun AnnotationToolbar(
             verticalAlignment = Alignment.Top,
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            // Settings popover (left of buttons)
+            // Tool buttons column — pen and highlight only (eraser is pen button)
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                MiniToolFab(
+                    emoji = "✒️",
+                    selected = activeTool == PenTool.FINE_PEN,
+                    onClick = {
+                        if (activeTool == PenTool.FINE_PEN) showSettings = !showSettings
+                        else { showSettings = false; onToolSelected(PenTool.FINE_PEN) }
+                    }
+                )
+                MiniToolFab(
+                    emoji = "🖍️",
+                    selected = activeTool == PenTool.HIGHLIGHTER,
+                    onClick = {
+                        if (activeTool == PenTool.HIGHLIGHTER) showSettings = !showSettings
+                        else { showSettings = false; onToolSelected(PenTool.HIGHLIGHTER) }
+                    }
+                )
+            }
+
+            // Settings popover (right of buttons)
             AnimatedVisibility(
                 visible = showSettings && activeTool != null && activeTool != PenTool.ERASER,
                 enter = fadeIn() + scaleIn(initialScale = 0.8f),
@@ -70,26 +90,6 @@ fun AnnotationToolbar(
                     strokeWidth = currentWidth,
                     onColorSelected = { color -> activeTool?.let { onColorSelected(it, color) } },
                     onWidthChanged = { width -> activeTool?.let { onWidthChanged(it, width) } }
-                )
-            }
-
-            // Tool buttons column — pen and highlight only (eraser is pen button)
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                MiniToolFab(
-                    emoji = "✒️",
-                    selected = activeTool == PenTool.FINE_PEN,
-                    onClick = {
-                        if (activeTool == PenTool.FINE_PEN) showSettings = !showSettings
-                        else { showSettings = false; onToolSelected(PenTool.FINE_PEN) }
-                    }
-                )
-                MiniToolFab(
-                    emoji = "🖍️",
-                    selected = activeTool == PenTool.HIGHLIGHTER,
-                    onClick = {
-                        if (activeTool == PenTool.HIGHLIGHTER) showSettings = !showSettings
-                        else { showSettings = false; onToolSelected(PenTool.HIGHLIGHTER) }
-                    }
                 )
             }
         }

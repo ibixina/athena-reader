@@ -146,18 +146,27 @@ fun PdfReaderView(
             modifier = Modifier
                 .fillMaxSize()
                 .pointerInteropFilter { event ->
-                    val isStylus = event.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS
+                    val isStylus = event.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS || 
+                                   event.getToolType(0) == MotionEvent.TOOL_TYPE_ERASER
 
                     // Track stylus proximity (hover events)
                     if (isStylus) {
                         lastStylusEventMs = System.currentTimeMillis()
                     }
 
-                    // Reject finger events when stylus is near or was recently used
+                    // Aggressively reject finger events when stylus is near or was recently used
+                    val palmCooldownMs = 1000L // Increased cooldown
                     val stylusNear = isStylusDrawing ||
                         (System.currentTimeMillis() - lastStylusEventMs < palmCooldownMs)
                     val isFinger = !isStylus
-                    if (isFinger && stylusNear && activeTool != null) {
+                    
+                    if (isFinger && stylusNear) {
+                        // Cancel any ongoing touch operations
+                        fingerDragged = false
+                        fingerDown = false
+                        secondPointerDown = false
+                        isTouchHighlighting = false
+                        longPressJob?.cancel()
                         return@pointerInteropFilter true // consume and ignore
                     }
 
@@ -254,7 +263,11 @@ fun PdfReaderView(
                                 val p0x = event.getX(0); val p0y = event.getY(0)
                                 val p1x = event.getX(1); val p1y = event.getY(1)
                                 val newDist = pinchDist(event)
-                                if (lastPinchDist > 0f) {
+                                
+                                val timeSinceDown = event.eventTime - fingerDownTime
+                                val touchDelay = if (activeTool != null) 150L else 0L
+
+                                if (lastPinchDist > 0f && timeSinceDown >= touchDelay) {
                                     val zoom = newDist / lastPinchDist
                                     val cx = (p0x + p1x) / 2f; val cy = (p0y + p1y) / 2f
                                     val panX = (p0x - lastPointer0X + p1x - lastPointer1X) / 2f
@@ -277,7 +290,11 @@ fun PdfReaderView(
                                     fingerDragged = true
                                     longPressJob?.cancel()
                                 }
-                                if (!isTouchHighlighting) {
+                                
+                                val timeSinceDown = event.eventTime - fingerDownTime
+                                val touchDelay = if (activeTool != null) 150L else 0L
+
+                                if (!isTouchHighlighting && timeSinceDown >= touchDelay) {
                                     offsetX = (offsetX + dx).coerceIn(boundsX(scale))
                                     offsetY = (offsetY + dy).coerceIn(boundsY(scale))
                                 }

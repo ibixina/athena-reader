@@ -9,5 +9,9 @@ interface SettingsRepository {
     suspend fun setShowPageNumbers(enabled: Boolean)
     suspend fun setShowPageScrubber(enabled: Boolean)
     suspend fun setKeepScreenOn(enabled: Boolean)
+    suspend fun setPenColor(color: Int)
+    suspend fun setPenWidth(width: Float)
+    suspend fun setHighlighterColor(color: Int)
+    suspend fun setHighlighterWidth(width: Float)
 }
 

@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.athenareader.domain.model.*
 import com.athenareader.domain.repository.AnnotationRepository
+import com.athenareader.domain.repository.SettingsRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.Job
@@ -20,7 +21,8 @@ data class ToolSettings(
 
 @HiltViewModel
 class AnnotationViewModel @Inject constructor(
-    private val repository: AnnotationRepository
+    private val repository: AnnotationRepository,
+    private val settingsRepository: SettingsRepository
 ) : ViewModel() {
 
     private val _activeTool = MutableStateFlow<PenTool?>(null)
@@ -37,6 +39,14 @@ class AnnotationViewModel @Inject constructor(
 
     private val _eraserWidth = MutableStateFlow(20f)
     val eraserWidth: StateFlow<Float> = _eraserWidth
+
+    init {
+        viewModelScope.launch {
+            val settings = settingsRepository.settings.first()
+            _penSettings.value = ToolSettings(settings.penColor, settings.penWidth)
+            _highlighterSettings.value = ToolSettings(settings.highlighterColor, settings.highlighterWidth)
+        }
+    }
 
     // Convenience: active color/width based on current tool
     val activeColor: StateFlow<Int> = combine(_activeTool, _penSettings, _highlighterSettings) { tool, pen, hl ->
@@ -95,26 +105,43 @@ class AnnotationViewModel @Inject constructor(
 
     fun setColor(tool: PenTool, color: Int) {
         when (tool) {
-            PenTool.FINE_PEN -> _penSettings.value = _penSettings.value.copy(color = color)
-            PenTool.HIGHLIGHTER -> _highlighterSettings.value = _highlighterSettings.value.copy(color = color)
+            PenTool.FINE_PEN -> {
+                _penSettings.value = _penSettings.value.copy(color = color)
+                viewModelScope.launch { settingsRepository.setPenColor(color) }
+            }
+            PenTool.HIGHLIGHTER -> {
+                _highlighterSettings.value = _highlighterSettings.value.copy(color = color)
+                viewModelScope.launch { settingsRepository.setHighlighterColor(color) }
+            }
             PenTool.ERASER -> {} // eraser has no color
         }
     }
 
     fun setStrokeWidth(tool: PenTool, width: Float) {
         when (tool) {
-            PenTool.FINE_PEN -> _penSettings.value = _penSettings.value.copy(strokeWidth = width)
-            PenTool.HIGHLIGHTER -> _highlighterSettings.value = _highlighterSettings.value.copy(strokeWidth = width)
+            PenTool.FINE_PEN -> {
+                _penSettings.value = _penSettings.value.copy(strokeWidth = width)
+                viewModelScope.launch { settingsRepository.setPenWidth(width) }
+            }
+            PenTool.HIGHLIGHTER -> {
+                _highlighterSettings.value = _highlighterSettings.value.copy(strokeWidth = width)
+                viewModelScope.launch { settingsRepository.setHighlighterWidth(width) }
+            }
             PenTool.ERASER -> _eraserWidth.value = width
         }
     }
 
     fun addLivePoint(point: StrokePoint) {
-        _livePoints.value = _livePoints.value + point
+        val current = _livePoints.value
+        if (current.isNotEmpty()) {
+            val prev = current.last()
+            if (hypot(point.x - prev.x, point.y - prev.y) < 2f) return
+        }
+        _livePoints.value = current + point
     }
 
     fun takeCompletedStroke(pageIndex: Int, forceTool: PenTool? = null): Stroke? {
-        val points = PenInputProcessor.simplify(_livePoints.value)
+        val points = _livePoints.value
         _livePoints.value = emptyList()
         if (points.size < 2) return null
 

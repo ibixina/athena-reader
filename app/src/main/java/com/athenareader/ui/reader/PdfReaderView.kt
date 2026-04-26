@@ -429,16 +429,16 @@ fun PdfReaderView(
                     val key = TileCache.generateKey(tile.pageIndex, tile.x, tile.y, tile.zoom)
                     val bitmap = loadedTiles[key] ?: return@forEach
                     val globalY = tile.pageIndex * (pageHeight + PAGE_GAP) + tile.y
+                    
+                    val startX = (tile.x * scale + offsetX).toInt()
+                    val startY = (globalY * scale + offsetY).toInt()
+                    val endX = ((tile.x + tile.width) * scale + offsetX).toInt()
+                    val endY = ((globalY + tile.height) * scale + offsetY).toInt()
+
                     drawImage(
                         image = bitmap.asImageBitmap(),
-                        dstOffset = IntOffset(
-                            (tile.x * scale + offsetX).toInt(),
-                            (globalY * scale + offsetY).toInt()
-                        ),
-                        dstSize = IntSize(
-                            (tile.width * scale).toInt(),
-                            (tile.height * scale).toInt()
-                        )
+                        dstOffset = IntOffset(startX, startY),
+                        dstSize = IntSize(endX - startX, endY - startY)
                     )
                 }
 

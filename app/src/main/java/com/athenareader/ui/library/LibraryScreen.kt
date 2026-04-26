@@ -228,45 +228,46 @@ fun BookShelfItem(document: Document, onClick: () -> Unit, coverCache: com.athen
 
 @Composable
 fun PdfCoverImage(uriString: String, modifier: Modifier = Modifier, coverCache: com.athenareader.core.cache.CoverCache? = null) {
-    var bitmap by remember { mutableStateOf<ImageBitmap?>(null) }
+    val cacheKey = uriString
+    var bitmap by remember(uriString) { mutableStateOf<ImageBitmap?>(coverCache?.getFromMemory(cacheKey)?.asImageBitmap()) }
     val context = LocalContext.current
 
-    val cacheKey = uriString
-
-    LaunchedEffect(uriString) {
-        withContext(Dispatchers.IO) {
-            val cached = coverCache?.get(cacheKey)
-            if (cached != null) {
-                withContext(Dispatchers.Main) {
-                    bitmap = cached.asImageBitmap()
-                }
-                return@withContext
-            }
-
-            try {
-                val uri = Uri.parse(uriString)
-                context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
-                    val renderer = android.graphics.pdf.PdfRenderer(pfd)
-                    if (renderer.pageCount > 0) {
-                        val page = renderer.openPage(0)
-                        val scale = 1.5f
-                        val w = (page.width * scale).toInt().coerceIn(100, 600)
-                        val h = (page.height * scale).toInt().coerceIn(100, 800)
-                        val bmp = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
-                        bmp.eraseColor(android.graphics.Color.WHITE)
-                        page.render(bmp, null, null, android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-                        page.close()
-
-                        coverCache?.put(cacheKey, bmp)
-
-                        withContext(Dispatchers.Main) {
-                            bitmap = bmp.asImageBitmap()
-                        }
+    if (bitmap == null) {
+        LaunchedEffect(uriString) {
+            withContext(Dispatchers.IO) {
+                val cached = coverCache?.get(cacheKey)
+                if (cached != null) {
+                    withContext(Dispatchers.Main) {
+                        bitmap = cached.asImageBitmap()
                     }
-                    renderer.close()
+                    return@withContext
                 }
-            } catch (t: Throwable) {
-                // Fallback on error
+
+                try {
+                    val uri = Uri.parse(uriString)
+                    context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                        val renderer = android.graphics.pdf.PdfRenderer(pfd)
+                        if (renderer.pageCount > 0) {
+                            val page = renderer.openPage(0)
+                            val scale = 1.5f
+                            val w = (page.width * scale).toInt().coerceIn(100, 600)
+                            val h = (page.height * scale).toInt().coerceIn(100, 800)
+                            val bmp = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
+                            bmp.eraseColor(android.graphics.Color.WHITE)
+                            page.render(bmp, null, null, android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                            page.close()
+
+                            coverCache?.put(cacheKey, bmp)
+
+                            withContext(Dispatchers.Main) {
+                                bitmap = bmp.asImageBitmap()
+                            }
+                        }
+                        renderer.close()
+                    }
+                } catch (t: Throwable) {
+                    // Fallback on error
+                }
             }
         }
     }

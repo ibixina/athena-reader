@@ -41,6 +41,10 @@ class CoverCache @Inject constructor(
         }
     }
 
+    fun getFromMemory(key: String): Bitmap? {
+        return memoryCache.get(key)
+    }
+
     private fun saveToDisk(key: String, bitmap: Bitmap) {
         val file = File(diskCacheDir, hashKey(key))
         try {

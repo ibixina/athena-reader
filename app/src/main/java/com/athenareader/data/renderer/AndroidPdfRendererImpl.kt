@@ -36,6 +36,8 @@ class AndroidPdfRendererImpl @Inject constructor(
     private var currentPageIndex: Int = -1
     private var textDocument: PDDocument? = null
     private var currentFilePath: String? = null
+    private var firstPageWidth: Int = -1
+    private var firstPageHeight: Int = -1
 
     override suspend fun openDocument(filePath: String) {
         mutex.withLock {
@@ -43,6 +45,8 @@ class AndroidPdfRendererImpl @Inject constructor(
                 try {
                     val uri = Uri.parse(filePath)
                     closeOpenDocuments()
+                    firstPageWidth = -1
+                    firstPageHeight = -1
                     currentFilePath = filePath
                     fileDescriptor = context.contentResolver.openFileDescriptor(uri, "r")
                     fileDescriptor?.let {
@@ -93,6 +97,10 @@ class AndroidPdfRendererImpl @Inject constructor(
                     currentPageIndex = pageIndex
                 }
                 val page = currentPage!!
+                if (pageIndex == 0) {
+                    firstPageWidth = page.width
+                    firstPageHeight = page.height
+                }
                 return@withLock PageInfo(pageIndex, page.width, page.height)
             }
         }
@@ -118,8 +126,26 @@ class AndroidPdfRendererImpl @Inject constructor(
                         val page = currentPage!!
                         bitmap.eraseColor(Color.WHITE)
                         val matrix = android.graphics.Matrix()
+                        
+                        val targetW = if (firstPageWidth > 0) firstPageWidth else page.width
+                        val targetH = if (firstPageHeight > 0) firstPageHeight else page.height
+                        
+                        // Fit page into targetW x targetH maintaining aspect ratio
+                        val scaleX = targetW.toFloat() / page.width
+                        val scaleY = targetH.toFloat() / page.height
+                        val pageScale = minOf(scaleX, scaleY)
+                        
+                        val dx = (targetW - page.width * pageScale) / 2f
+                        val dy = (targetH - page.height * pageScale) / 2f
+                        
+                        // Transform from PDF page space to uniform page space
+                        matrix.postScale(pageScale, pageScale)
+                        matrix.postTranslate(dx, dy)
+                        
+                        // Transform from uniform page space to tile bitmap space
                         matrix.postScale(z, z)
                         matrix.postTranslate(-tile.x * z, -tile.y * z)
+                        
                         page.render(bitmap, null, matrix, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
                     } catch (e: Exception) {
                         e.printStackTrace()

@@ -85,6 +85,7 @@ class TileRendererPool @Inject constructor(
             enqueuedKeys.clear()
             pendingCallbacks.clear()
         }
+        tileCache.clear()
     }
 
     private data class TileRequest(

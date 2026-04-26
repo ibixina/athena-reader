@@ -311,17 +311,23 @@ fun ReaderScreen(
 
         // Floating annotation toolbar (right edge)
         if (uiState is ReaderUiState.PdfActive) {
-            AnnotationToolbar(
-                activeTool = activeTool,
-                penSettings = penSettings,
-                highlighterSettings = highlighterSettings,
-                onToolSelected = { annotationViewModel.selectTool(it) },
-                onColorSelected = { tool, color -> annotationViewModel.setColor(tool, color) },
-                onWidthChanged = { tool, width -> annotationViewModel.setStrokeWidth(tool, width) },
+            androidx.compose.animation.AnimatedVisibility(
+                visible = showHeader,
+                enter = androidx.compose.animation.fadeIn(),
+                exit = androidx.compose.animation.fadeOut(),
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(top = 80.dp, end = 8.dp)
-            )
+            ) {
+                AnnotationToolbar(
+                    activeTool = activeTool,
+                    penSettings = penSettings,
+                    highlighterSettings = highlighterSettings,
+                    onToolSelected = { annotationViewModel.selectTool(it) },
+                    onColorSelected = { tool, color -> annotationViewModel.setColor(tool, color) },
+                    onWidthChanged = { tool, width -> annotationViewModel.setStrokeWidth(tool, width) }
+                )
+            }
         }
     }
 }

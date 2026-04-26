@@ -251,23 +251,12 @@ fun PdfReaderView(
                                     pressure = event.pressure,
                                     timestamp = event.eventTime
                                 ))
-                            } else if (isTouchHighlighting) {
-                                // Touch highlight: capture points while dragging
-                                onPointAdded(StrokePoint(
-                                    x = (event.x - offsetX) / scale,
-                                    y = (event.y - offsetY) / scale,
-                                    pressure = 0.5f,
-                                    timestamp = event.eventTime
-                                ))
                             } else if (secondPointerDown && event.pointerCount >= 2) {
                                 val p0x = event.getX(0); val p0y = event.getY(0)
                                 val p1x = event.getX(1); val p1y = event.getY(1)
                                 val newDist = pinchDist(event)
-                                
-                                val timeSinceDown = event.eventTime - fingerDownTime
-                                val touchDelay = if (activeTool != null) 150L else 0L
 
-                                if (lastPinchDist > 0f && timeSinceDown >= touchDelay) {
+                                if (lastPinchDist > 0f) {
                                     val zoom = newDist / lastPinchDist
                                     val cx = (p0x + p1x) / 2f; val cy = (p0y + p1y) / 2f
                                     val panX = (p0x - lastPointer0X + p1x - lastPointer1X) / 2f
@@ -288,16 +277,10 @@ fun PdfReaderView(
                                 val totalDx = event.x - fingerDownX; val totalDy = event.y - fingerDownY
                                 if (totalDx * totalDx + totalDy * totalDy > TAP_SLOP * TAP_SLOP) {
                                     fingerDragged = true
-                                    longPressJob?.cancel()
                                 }
-                                
-                                val timeSinceDown = event.eventTime - fingerDownTime
-                                val touchDelay = if (activeTool != null) 150L else 0L
 
-                                if (!isTouchHighlighting && timeSinceDown >= touchDelay) {
-                                    offsetX = (offsetX + dx).coerceIn(boundsX(scale))
-                                    offsetY = (offsetY + dy).coerceIn(boundsY(scale))
-                                }
+                                offsetX = (offsetX + dx).coerceIn(boundsX(scale))
+                                offsetY = (offsetY + dy).coerceIn(boundsY(scale))
                                 lastFingerX = event.x; lastFingerY = event.y
                                 velocitySamples.add(Triple(event.eventTime, event.x, event.y))
                                 if (velocitySamples.size > 20) velocitySamples.removeAt(0)
@@ -465,9 +448,8 @@ fun PdfReaderView(
                 }
 
                 // Draw live stroke
-                val currentTool = if (isTouchHighlighting) PenTool.HIGHLIGHTER else activeTool
-                if (livePoints.isNotEmpty() && (currentTool != null || stylusButtonHeld)) {
-                    val renderTool = currentTool ?: PenTool.ERASER
+                if (livePoints.isNotEmpty() && (activeTool != null || stylusButtonHeld)) {
+                    val renderTool = activeTool ?: PenTool.ERASER
                     drawLiveStroke(livePoints, activeColor, strokeWidth, renderTool, scale, offsetX, offsetY, isErasing = stylusButtonHeld)
                 }
             }
